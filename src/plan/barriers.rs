@@ -21,6 +21,8 @@ pub enum BarrierSelector {
     NoBarrier,
     /// Object remembering barrier is used.
     ObjectBarrier,
+
+    ObjectPreBarrier,
 }
 
 impl BarrierSelector {
@@ -237,6 +239,97 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     }
 
     fn memory_region_copy_post(
+        &mut self,
+        src: <S::VM as VMBinding>::VMMemorySlice,
+        dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        self.semantics.memory_region_copy_slow(src, dst);
+    }
+
+    fn object_probable_write(&mut self, obj: ObjectReference) {
+        if self.object_is_unlogged(obj) {
+            self.semantics.object_probable_write_slow(obj);
+        }
+    }
+}
+
+
+pub struct ObjectPreBarrier<S: BarrierSemantics> {
+    semantics: S,
+}
+
+impl<S: BarrierSemantics> ObjectPreBarrier<S> {
+    pub fn new(semantics: S) -> Self {
+        Self { semantics }
+    }
+
+    /// Attempt to atomically log an object.
+    /// Returns true if the object is not logged previously.
+    fn object_is_unlogged(&self, object: ObjectReference) -> bool {
+        unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
+    }
+
+    /// Attempt to atomically log an object.
+    /// Returns true if the object is not logged previously.
+    fn log_object(&self, object: ObjectReference) -> bool {
+        #[cfg(all(feature = "vo_bit", feature = "extreme_assertions"))]
+        debug_assert!(
+            crate::util::metadata::vo_bit::is_vo_bit_set(object),
+            "object bit is unset"
+        );
+        loop {
+            let old_value =
+                S::UNLOG_BIT_SPEC.load_atomic::<S::VM, u8>(object, None, Ordering::SeqCst);
+            if old_value == 0 {
+                return false;
+            }
+            if S::UNLOG_BIT_SPEC
+                .compare_exchange_metadata::<S::VM, u8>(
+                    object,
+                    1,
+                    0,
+                    None,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+}
+
+//converet the post calls to pre
+//delete all logging checking
+impl<S: BarrierSemantics> Barrier<S::VM> for ObjectPreBarrier<S> {
+    fn flush(&mut self) {
+        self.semantics.flush();
+    }
+
+    fn object_reference_write_pre(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
+    ) {
+
+        self.object_reference_write_slow(src, slot, target);
+        
+    }
+
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
+    ) {
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
+        
+    }
+
+    fn memory_region_copy_pre(
         &mut self,
         src: <S::VM as VMBinding>::VMMemorySlice,
         dst: <S::VM as VMBinding>::VMMemorySlice,

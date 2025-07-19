@@ -58,6 +58,8 @@ pub fn create_mutator<VM: VMBinding>(
         PlanSelector::StickyImmix => {
             crate::plan::sticky::immix::mutator::create_stickyimmix_mutator(tls, mmtk)
         }
+
+        PlanSelector::RC => crate::plan::rc::mutator::create_rc_mutator(tls, mmtk),
     })
 }
 
@@ -90,6 +92,10 @@ pub fn create_plan<VM: VMBinding>(
         }
         PlanSelector::StickyImmix => {
             Box::new(crate::plan::sticky::immix::StickyImmix::new(args)) as Box<dyn Plan<VM = VM>>
+        }
+
+        PlanSelector::RC => {
+            Box::new(crate::plan::rc::RC::new(args)) as Box<dyn Plan<VM = VM>>
         }
     };
 
